@@ -48,7 +48,9 @@ ALL_SERVICES="voice_enhance"
 # Helper Functions
 # =============================================================================
 
-# Parse .env files and construct comma-separated KEY=VALUE pairs for gcloud
+# Parse .env files and construct KEY=VALUE pairs for gcloud, joined with '~'
+# instead of ',' so values may contain commas (e.g. TELEGRAM_USER_IDS);
+# passed to gcloud as --set-env-vars="^~^K=V~K2=V2" (see `gcloud topic escaping`)
 get_env_vars_string() {
   local service_dir="$1"
   local pairs=""
@@ -66,7 +68,7 @@ get_env_vars_string() {
       else
         val="$raw_val"
       fi
-      pairs+="${key}=${val},"
+      pairs+="${key}=${val}~"
     done < <(grep -v '^\s*#' .env | grep .)
   fi
 
@@ -84,13 +86,13 @@ get_env_vars_string() {
         val="$raw_val"
       fi
       # Remove duplicate keys
-      pairs=$(echo "$pairs" | sed -E "s/${key}=[^,]*,?//g")
-      pairs+="${key}=${val},"
+      pairs=$(echo "$pairs" | sed -E "s/${key}=[^~]*~?//g")
+      pairs+="${key}=${val}~"
     done < <(grep -v '^\s*#' "$env_file" | grep .)
   fi
 
-  # Trim trailing comma
-  echo "${pairs%,}"
+  # Trim trailing delimiter
+  echo "${pairs%~}"
 }
 
 deploy_service() {
@@ -131,7 +133,8 @@ deploy_service() {
   # Get environment variables (root .env merged with service .env)
   local env_vars=$(get_env_vars_string "$service_dir")
   if [ -n "$ADDITIONAL_ENV_VARS" ]; then
-    env_vars="${env_vars},${ADDITIONAL_ENV_VARS}"
+    # ADDITIONAL_ENV_VARS must be '~'-joined KEY=VALUE pairs
+    env_vars="${env_vars}~${ADDITIONAL_ENV_VARS}"
   fi
 
   # ---------------------------------------------------------------------------
@@ -187,7 +190,7 @@ deploy_service() {
     --allow-unauthenticated \
     --port=8080 \
     "${resource_flags[@]}" \
-    --set-env-vars="${env_vars}" \
+    --set-env-vars="^~^${env_vars}" \
     --project=${PROJECT_ID}
 
   # Get and export service URL
@@ -288,6 +291,19 @@ for service in ${DEPLOY_SERVICES}; do
     --region=${REGION} \
     --project=${PROJECT_ID} >/dev/null 2>&1 || echo "Warning: Could not bind ${cloud_run_name}"
 done
+
+# =============================================================================
+# Telegram Webhook (voice_enhance bot lives in the same service)
+# =============================================================================
+
+if [ -n "${VOICE_ENHANCE_SERVICE_URL}" ] && [ -n "${TELEGRAM_BOT_TOKEN}" ] && [ -n "${TELEGRAM_WEBHOOK_SECRET}" ]; then
+  echo "Registering Telegram webhook..."
+  curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+    --data-urlencode "url=${VOICE_ENHANCE_SERVICE_URL}/telegram/webhook" \
+    --data-urlencode "secret_token=${TELEGRAM_WEBHOOK_SECRET}" \
+    --data-urlencode 'allowed_updates=["message"]' \
+    | grep -q '"ok":true' && echo "Telegram webhook set." || echo "WARNING: Telegram setWebhook failed"
+fi
 
 echo "=========================================="
 echo "Deployment Complete!"

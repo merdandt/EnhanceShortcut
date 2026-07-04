@@ -40,6 +40,26 @@ Optional tuning query params: `nfe` (1-128, default 64), `solver`
 Reports `cuda_available` / `model_loaded` so you can verify the GPU actually
 attached after a deploy.
 
+### Telegram bot (@enhance_shortcut_bot)
+
+Lives inside the same service as a webhook (`POST /telegram/webhook`, secured
+by Telegram's secret token header — registered automatically by
+`deploy_cloud_run.sh`). Send the bot a voice message or audio file (≤20 MB,
+Telegram's bot limit) and it replies with the cleaned WAV. Only user IDs in
+`TELEGRAM_USER_IDS` (root `.env`, comma-separated) are allowed; anyone else
+gets a reply with their numeric ID so you can whitelist them, e.g.:
+
+```
+TELEGRAM_USER_IDS=123456789,987654321
+```
+
+After changing the whitelist, redeploy — or update just the env var (fast):
+
+```bash
+gcloud run services update voice-enhance-service --region=europe-west4 \
+  --project=<PROJECT_ID> --update-env-vars=TELEGRAM_USER_IDS=123456789
+```
+
 ## Setup
 
 1. Fill the empty values in `.env` (PROJECT_ID + R2_*). `REGION`,

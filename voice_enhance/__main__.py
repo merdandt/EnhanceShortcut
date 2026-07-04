@@ -22,7 +22,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
-from voice_enhance import engine, r2
+from voice_enhance import engine, r2, telegram_bot
 
 # Import shared config if available
 try:
@@ -55,10 +55,6 @@ DEFAULT_TAU = float(os.environ.get("DEFAULT_TAU", "0.5"))
 # broken GPU deploy is visible immediately; leave unset for local dev).
 REQUIRE_MODEL = os.environ.get("REQUIRE_MODEL", "").strip().lower() in ("1", "true", "yes")
 
-# One enhancement at a time: the service is deployed with --concurrency=1,
-# this semaphore keeps local dev honest too.
-_gpu_semaphore = asyncio.Semaphore(1)
-
 
 # =============================================================================
 # FastAPI Application
@@ -80,6 +76,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Telegram bot webhook (@enhance_shortcut_bot) — lives in the same service
+app.include_router(telegram_bot.router)
 
 
 # =============================================================================
@@ -109,6 +108,7 @@ async def health_check():
         "device": engine.DEVICE,
         "model_loaded": engine.MODEL_LOADED,
         "model_error": engine.LOAD_ERROR,
+        "telegram_bot": telegram_bot.is_configured(),
     })
 
 
@@ -215,7 +215,7 @@ async def enhance_audio(
             )
 
         out_path = tmpdir / "enhanced.wav"
-        async with _gpu_semaphore:
+        async with engine.GPU_SEMAPHORE:
             try:
                 stats = await asyncio.to_thread(
                     engine.process_file,

@@ -6,6 +6,7 @@ device) — the (run_dir, device) pair must therefore be identical between the
 startup load and per-request calls.
 """
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -13,6 +14,11 @@ import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# One enhancement at a time on the GPU. Shared by the HTTP /enhance endpoint
+# and the Telegram bot (the service also deploys with --concurrency=1, but
+# the bot processes in background tasks, so this is the real serializer).
+GPU_SEMAPHORE = asyncio.Semaphore(1)
 
 # Where the enhancer_stage2 checkpoint lives. The Docker image bakes it at
 # /models/enhancer_stage2 (MODEL_RUN_DIR set in Dockerfile); locally it is
