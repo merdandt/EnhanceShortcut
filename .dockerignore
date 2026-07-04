@@ -1,0 +1,21 @@
+# Secrets never go into images (env is injected by Cloud Run at deploy time)
+.env
+**/.env
+
+# Local-only artifacts
+.git
+.gitignore
+venv/
+.venv*/
+models/
+samples/
+__pycache__/
+**/__pycache__/
+*.wav
+*.mp3
+*.m4a
+*.ogg
+README.md
+Makefile
+deploy_*.sh
+cloudbuild-*.yaml

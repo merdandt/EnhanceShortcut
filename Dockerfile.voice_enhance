@@ -1,0 +1,71 @@
+# Dockerfile for voice_enhance
+#
+# Deviates from the skill's python:3.13-slim template: resemble-enhance needs
+# CUDA-enabled torch on an NVIDIA L4 GPU. Base image CUDA 12.1 matches the
+# torch cu121 wheels; Ubuntu 22.04 ships Python 3.10 (resemble-enhance needs
+# >=3.10, and torch must stay <2.6 — newer torch breaks its checkpoint load).
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+WORKDIR /app
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# ffmpeg: audio decode; git: pip install from a pinned commit;
+# build-essential: deepspeed's setup; cuda-nvcc-12-1: the -runtime base image
+# ships /usr/local/cuda WITHOUT nvcc, and deepspeed's setup.py probes
+# `$CUDA_HOME/bin/nvcc -V` whenever CUDA_HOME exists — missing nvcc kills the
+# build (matches torch cu121, so no version-mismatch assert either)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv \
+        ffmpeg git ca-certificates build-essential cuda-nvcc-12-1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 1) CUDA torch, pinned (cu121 to match the base image; <2.6 required)
+RUN pip3 install torch==2.4.1 torchaudio==2.4.1 \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# 2) deepspeed build prerequisites, then deepspeed itself.
+#    resemble-enhance imports deepspeed at inference time (via its train
+#    module), so it cannot be skipped. --no-build-isolation lets its setup.py
+#    see the already-installed torch.
+#    TORCH_CUDA_ARCH_LIST pins the arch to L4 (sm_89) — no GPU is attached at
+#    build time, so deepspeed cannot autodetect it.
+RUN pip3 install setuptools wheel ninja packaging py-cpuinfo numpy==1.26.4 \
+    && TORCH_CUDA_ARCH_LIST="8.9" pip3 install --no-build-isolation deepspeed==0.15.4
+
+# 3) Service dependencies (copied first for better layer caching)
+COPY voice_enhance/requirements.txt /app/requirements.txt
+RUN pip3 install -r /app/requirements.txt
+
+# 4) resemble-enhance pinned to a commit, --no-deps: its declared deps drag in
+#    gradio/torchvision/celluloid/etc. that the inference path never imports,
+#    and would fight the torch pin above.
+RUN pip3 install --no-deps \
+    "resemble-enhance @ git+https://github.com/resemble-ai/resemble-enhance.git@8e978149bfe8abab3eb77d965d579a111afdb0ff"
+
+# 5) Bake model weights (~700 MB) into the image so cold starts don't download
+ENV MODEL_RUN_DIR=/models/enhancer_stage2
+RUN python3 -c "from resemble_enhance.enhancer.download import download; download('${MODEL_RUN_DIR}')"
+
+# Fail the build early if anything is missing: actually construct the model
+# on CPU (catches lazy imports like pandas->tabulate, not just module imports)
+RUN python3 -c "from resemble_enhance.enhancer.inference import load_enhancer; load_enhancer('${MODEL_RUN_DIR}', 'cpu'); import fastapi, boto3, soundfile; print('model load + imports ok')"
+
+# Copy shared common module
+COPY common/ /app/common/
+
+# Copy service code
+COPY voice_enhance/ /app/voice_enhance/
+
+# Sanity-check the app module itself
+RUN python3 -c "import voice_enhance.__main__; print('app import ok')"
+
+# Cloud Run provides PORT env var, default to 8080.
+# REQUIRE_MODEL: crash at startup (visible failed deploy) if the model can't load.
+ENV PORT=8080 \
+    REQUIRE_MODEL=1
+
+# Run with uvicorn
+CMD ["sh", "-c", "uvicorn voice_enhance.__main__:app --host 0.0.0.0 --port $PORT"]

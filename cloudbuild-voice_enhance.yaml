@@ -1,0 +1,24 @@
+# Cloud Build configuration for voice_enhance
+# Pattern per gcp-cloudrun-microservices skill; no GPU-specific build steps
+# (GPU is a deploy-time concern). Bigger machine + timeout because the image
+# pulls ~3 GB of CUDA torch wheels and bakes ~1.7 GB of model weights.
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: [
+      'build',
+      '-t', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/voice_enhance:latest',
+      '-f', 'Dockerfile.voice_enhance',
+      '.'
+    ]
+
+images:
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/voice_enhance:latest'
+
+substitutions:
+  _REGION: 'europe-west4'
+  _REPO_NAME: 'voice-tools'
+
+options:
+  machineType: 'E2_HIGHCPU_8'
+
+timeout: '5400s'

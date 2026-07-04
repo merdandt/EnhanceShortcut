@@ -1,0 +1,15 @@
+# Keeps the Cloud Build upload small and secrets out of the build context.
+.git
+.gitignore
+.env
+**/.env
+venv/
+.venv*/
+models/
+samples/
+__pycache__/
+**/__pycache__/
+*.wav
+*.mp3
+*.m4a
+*.ogg
